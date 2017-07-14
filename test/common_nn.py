@@ -88,22 +88,22 @@ module_tests = [
     dict(
         module_name='Softmax',
         input_size=(10, 20),
-        reference_fn=lambda i, _: torch.exp(i).div(torch.exp(i).sum(1).expand(10, 20))
+        reference_fn=lambda i, _: torch.exp(i).div(torch.exp(i).sum(1, True).expand(10, 20))
     ),
     dict(
         module_name='Softmax2d',
         input_size=(1, 3, 10, 20),
-        reference_fn=lambda i, _: torch.exp(i).div(torch.exp(i).sum(1).expand_as(i))
+        reference_fn=lambda i, _: torch.exp(i).div(torch.exp(i).sum(1, False))
     ),
     dict(
         module_name='LogSoftmax',
         input_size=(10, 20),
-        reference_fn=lambda i, _: torch.exp(i).div_(torch.exp(i).sum(1).expand(10, 20)).log_()
+        reference_fn=lambda i, _: torch.exp(i).div_(torch.exp(i).sum(1, True).expand(10, 20)).log_()
     ),
     dict(
         module_name='LogSoftmax',
         input_size=(1, 3, 10, 20),
-        reference_fn=lambda i, _: torch.exp(i).div_(torch.exp(i).sum(1).expand_as(i)).log_(),
+        reference_fn=lambda i, _: torch.exp(i).div_(torch.exp(i).sum(1, False)).log_(),
         desc='multiparam'
     ),
     dict(
@@ -282,6 +282,13 @@ criterion_tests = [
         input_size=(2, 3, 5, 5),
         target=torch.rand(2, 5, 5).mul(3).floor().long(),
         desc='weights'
+    ),
+    dict(
+        module_name='NLLLoss2d',
+        constructor_args=(None, True, 3),
+        input_size=(2, 3, 5, 5),
+        target=torch.rand(2, 5, 5).mul(4).floor().long(),
+        desc='ignore_index'
     ),
     dict(
         module_name='HingeEmbeddingLoss',

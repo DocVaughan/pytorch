@@ -15,15 +15,28 @@ from torch.autograd import Variable
 
 torch.set_default_tensor_type('torch.DoubleTensor')
 
+SEED = 0
+SEED_SET = 0
 
-def run_tests():
+
+def parse_set_seed_once():
+    global SEED
+    global SEED_SET
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--seed', type=int, default=123)
     args, remaining = parser.parse_known_args()
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+    if SEED_SET == 0:
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+        SEED = args.seed
+        SEED_SET = 1
     remaining = [sys.argv[0]] + remaining
+    return remaining
+
+
+def run_tests():
+    remaining = parse_set_seed_once()
     unittest.main(argv=remaining)
 
 
@@ -118,6 +131,11 @@ def is_iterable(obj):
 class TestCase(unittest.TestCase):
     precision = 1e-5
 
+    def setUp(self):
+        torch.manual_seed(SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(SEED)
+
     def assertTensorsSlowEqual(self, x, y, prec=None, message=''):
         max_err = 0
         self.assertEqual(x.size(), y.size())
@@ -151,13 +169,18 @@ class TestCase(unittest.TestCase):
 
         return tg
 
+    def unwrapVariables(self, x, y):
+        if isinstance(x, Variable) and isinstance(y, Variable):
+            return x.data, y.data
+        elif isinstance(x, Variable) or isinstance(y, Variable):
+            raise AssertionError("cannot compare {} and {}".format(type(x), type(y)))
+        return x, y
+
     def assertEqual(self, x, y, prec=None, message=''):
         if prec is None:
             prec = self.precision
 
-        if isinstance(x, Variable) and isinstance(y, Variable):
-            x = x.data
-            y = y.data
+        x, y = self.unwrapVariables(x, y)
 
         if torch.is_tensor(x) and torch.is_tensor(y):
             def assertTensorsEqual(a, b):
@@ -184,7 +207,10 @@ class TestCase(unittest.TestCase):
                 assertTensorsEqual(x, y)
         elif type(x) == str and type(y) == str:
             super(TestCase, self).assertEqual(x, y)
+        elif type(x) == set and type(y) == set:
+            super(TestCase, self).assertEqual(x, y)
         elif is_iterable(x) and is_iterable(y):
+            super(TestCase, self).assertEqual(len(x), len(y))
             for x_, y_ in zip(x, y):
                 self.assertEqual(x_, y_, prec, message)
         else:
@@ -199,9 +225,7 @@ class TestCase(unittest.TestCase):
         if prec is None:
             prec = self.precision
 
-        if isinstance(x, Variable) and isinstance(y, Variable):
-            x = x.data
-            y = y.data
+        x, y = self.unwrapVariables(x, y)
 
         if torch.is_tensor(x) and torch.is_tensor(y):
             if x.size() != y.size():
@@ -235,24 +259,33 @@ class TestCase(unittest.TestCase):
                 return
         raise AssertionError("object not found in iterable")
 
+    if sys.version_info < (3, 2):
+        # assertRaisesRegexp renamed assertRaisesRegex in 3.2
+        assertRaisesRegex = unittest.TestCase.assertRaisesRegexp
 
-def download_file(url, path, binary=True):
+
+def download_file(url, binary=True):
     if sys.version_info < (3,):
+        from urlparse import urlsplit
         import urllib2
         request = urllib2
         error = urllib2
     else:
-        import urllib.request
-        import urllib.error
-        request = urllib.request
-        error = urllib.error
+        from urllib.parse import urlsplit
+        from urllib import request, error
+
+    filename = os.path.basename(urlsplit(url)[2])
+    data_dir = os.path.join(os.path.dirname(__file__), 'data')
+    path = os.path.join(data_dir, filename)
 
     if os.path.exists(path):
-        return True
+        return path
     try:
         data = request.urlopen(url, timeout=15).read()
         with open(path, 'wb' if binary else 'w') as f:
             f.write(data)
-        return True
-    except error.URLError as e:
-        return False
+        return path
+    except error.URLError:
+        msg = "could not download test file '{}'".format(url)
+        warnings.warn(msg, RuntimeWarning)
+        raise unittest.SkipTest(msg)

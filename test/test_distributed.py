@@ -14,7 +14,12 @@ from common import TestCase
 BACKEND = os.environ['BACKEND']
 TEMP_DIR = os.environ['TEMP_DIR']
 MASTER_PORT = '29500'
-MASTER_ADDR = '127.0.0.1:' + MASTER_PORT
+MASTER_ADDR = '127.0.0.1'
+
+
+if not dist.is_available():
+    print('Distributed not available, skipping tests')
+    sys.exit(0)
 
 
 @contextmanager
@@ -64,7 +69,7 @@ class Barrier(object):
                         data = f.read()
                         if int(data) >= cls.barrier_id:
                             arrived += 1
-            if arrived == dist.get_num_processes():
+            if arrived == dist.get_world_size():
                 break
 
             if time.time() - start_time > timeout:
@@ -87,7 +92,7 @@ class _DistTestBase(object):
         return (group, group_id, rank)
 
     def _init_global_test(self):
-        group = [i for i in range(0, dist.get_num_processes())]
+        group = [i for i in range(0, dist.get_world_size())]
         group_id = dist.group.WORLD
         rank = dist.get_rank()
         return (group, group_id, rank)
@@ -96,7 +101,7 @@ class _DistTestBase(object):
     def test_get_rank(self):
         test_dir = os.path.join(TEMP_DIR, 'test_dir')
         pid = str(os.getpid())
-        num_processes = dist.get_num_processes()
+        num_processes = dist.get_world_size()
         with open(os.path.join(test_dir, pid), 'w') as f:
             f.write(str(dist.get_rank()))
 
@@ -121,12 +126,12 @@ class _DistTestBase(object):
     def test_send_recv(self):
         rank = dist.get_rank()
         tensor = _build_tensor(rank + 1)
-        for dest in range(0, dist.get_num_processes()):
+        for dest in range(0, dist.get_world_size()):
             if dest == rank:
                 continue
             dist.send(tensor, dest)
 
-        for src in range(0, dist.get_num_processes()):
+        for src in range(0, dist.get_world_size()):
             if src == rank:
                 continue
             tensor = _build_tensor(src + 1, value=-1)
@@ -142,27 +147,27 @@ class _DistTestBase(object):
     def test_send_recv_any_source(self):
         rank = dist.get_rank()
         tensor = _build_tensor(10, rank)
-        for dest in range(0, dist.get_num_processes()):
+        for dest in range(0, dist.get_world_size()):
             if dest == rank:
                 continue
             dist.send(tensor, dest)
 
         recv_ranks = set()
-        for src in range(0, dist.get_num_processes()):
+        for src in range(0, dist.get_world_size()):
             if src == rank:
                 continue
             tensor = _build_tensor(10, value=-1)
             dist.recv(tensor)
             recv_ranks.add(tensor.resize_(1)[0])
 
-        self.assertEqual(len(recv_ranks), dist.get_num_processes() - 1)
+        self.assertEqual(len(recv_ranks), dist.get_world_size() - 1)
         self._barrier()
 
     # ISEND
     @unittest.skipIf(BACKEND == 'gloo', "Gloo does not support isend")
     def test_isend(self):
         rank = dist.get_rank()
-        world_size = dist.get_num_processes()
+        world_size = dist.get_world_size()
 
         if rank == 0:
             requests = [
@@ -182,7 +187,7 @@ class _DistTestBase(object):
     @unittest.skipIf(BACKEND == 'gloo', "Gloo does not support irecv")
     def test_irecv(self):
         rank = dist.get_rank()
-        world_size = dist.get_num_processes()
+        world_size = dist.get_world_size()
 
         if rank == 0:
             expected_tensors = [_build_tensor(src, -1) for src in range(1, world_size)]
@@ -382,13 +387,9 @@ class _DistTestBase(object):
         for dest in group:
             tensor = _build_tensor(dest + 1, -1)
             expected_tensor = _build_tensor(dest + 1, rank)
-            if rank == dest:
-                tensors = [_build_tensor(dest + 1, i) for i in group]
-                dist.scatter_send(tensors, tensor, group_id)
-                self.assertEqual(tensor, expected_tensor)
-            else:
-                dist.scatter_recv(tensor, dest, group_id)
-                self.assertEqual(tensor, expected_tensor)
+            tensors = [_build_tensor(dest + 1, i) for i in group] if rank == dest else []
+            dist.scatter(tensor, src=dest, scatter_list=tensors, group=group_id)
+            self.assertEqual(tensor, expected_tensor)
 
         self._barrier()
 
@@ -406,15 +407,12 @@ class _DistTestBase(object):
     def _test_gather_helper(self, group, group_id, rank):
         for dest in group:
             tensor = _build_tensor(dest + 1, rank)
+            tensors = [_build_tensor(dest + 1, -1) for i in group] if rank == dest else []
+            dist.gather(tensor, dst=dest, gather_list=tensors, group=group_id)
             if rank == dest:
-                tensors = [_build_tensor(dest + 1, -1) for i in group]
-                dist.gather_recv(tensors, tensor, group_id)
-
                 expected_tensors = [_build_tensor(dest + 1, i) for i in group]
                 for t1, t2 in zip(tensors, expected_tensors):
                     self.assertEqual(t1, t2)
-            else:
-                dist.gather_send(tensor, dest, group_id)
 
         self._barrier()
 
@@ -524,7 +522,11 @@ if BACKEND == 'tcp' or BACKEND == 'gloo':
 
         def _run(self, rank):
             self.rank = rank
-            dist.init_process_group(backend=BACKEND)
+            try:
+                dist.init_process_group(backend=BACKEND)
+            except RuntimeError as e:
+                if 'recompile' in e.args[0]:
+                    sys.exit(0)
             # self.id() == e.g. '__main__.TestDistributed.test_get_rank'
             # We're retreiving a corresponding test and executing it.
             getattr(self, self.id().split(".")[2])()
