@@ -803,6 +803,20 @@ class TestNN(NNTestCase):
         self.assertEqual(output[0][0].sum().data[0], 0)
         self.assertEqual(output[1][2].sum().data[0], 0)
 
+    def test_embedding_functional(self):
+        a = Variable(torch.LongTensor([
+            [1, 3, 2],
+            [0, 2, 1]
+        ]))
+        embeddings = Variable(torch.rand(4, 3), requires_grad=True)
+
+        embed_old = torch.nn.Embedding(4, 3)
+        embed_old.weight.data = embeddings.data
+        res_old = embed_old(a)
+
+        res_F = F.embedding(a, embeddings)
+        self.assertEqual(res_old, res_F)
+
     def _test_EmbeddingBag(self, cuda, mode):
         # check a known test example
         es = nn.EmbeddingBag(5, 2, mode=mode)
@@ -1532,7 +1546,7 @@ class TestNN(NNTestCase):
         c = nn.Conv2d(3, 3, 3)
         o1 = c(input)
         o1.sum().backward()
-        self.assertRaisesRegex(RuntimeError, 'Specify retain_variables=True',
+        self.assertRaisesRegex(RuntimeError, 'Specify retain_graph=True',
                                lambda: o1.sum().backward())
 
     @unittest.skipIf(not TEST_CUDA, 'CUDA not available')
@@ -2273,6 +2287,47 @@ class TestNN(NNTestCase):
 
         weight = torch.rand(4)
         self.assertEqual(nn.BCEWithLogitsLoss(weight)(output, target), nn.BCELoss(weight)(sigmoid(output), target))
+
+    def test_bce_with_logits_broadcasts_weights(self):
+        target = Variable(torch.rand(16, 4))
+        output = Variable(torch.rand(16, 4) - 0.5)
+
+        weight = torch.rand(4)
+        out1 = nn.BCEWithLogitsLoss(weight)(output, target)
+
+        weight = weight.expand(16, 4).contiguous()
+        out2 = nn.BCEWithLogitsLoss(weight)(output, target)
+
+        self.assertEqual(out1, out2)
+
+        weight = torch.rand(16, 1)
+        out1 = nn.BCEWithLogitsLoss(weight)(output, target)
+
+        weight = weight.expand(16, 4).contiguous()
+        out2 = nn.BCEWithLogitsLoss(weight)(output, target)
+
+        self.assertEqual(out1, out2)
+
+    def test_bce_loss_broadcasts_weights(self):
+        sigmoid = nn.Sigmoid()
+        target = Variable(torch.rand(16, 4))
+        output = Variable(torch.rand(16, 4) - 0.5)
+
+        weight = torch.rand(4)
+        out1 = nn.BCELoss(weight)(sigmoid(output), target)
+
+        weight = weight.expand(16, 4).contiguous()
+        out2 = nn.BCELoss(weight)(sigmoid(output), target)
+
+        self.assertEqual(out1, out2)
+
+        weight = torch.rand(16, 1)
+        out1 = nn.BCELoss(weight)(sigmoid(output), target)
+
+        weight = weight.expand(16, 4).contiguous()
+        out2 = nn.BCELoss(weight)(sigmoid(output), target)
+
+        self.assertEqual(out1, out2)
 
     def test_batchnorm_raises_error_if_running_mean_is_not_same_size_as_input(self):
         input = Variable(torch.rand(2, 10))
@@ -3669,6 +3724,7 @@ for test_params in module_tests + new_module_tests:
         test_params['constructor'] = getattr(nn, name)
     test = NewModuleTest(**test_params)
     add_test(test)
+
 for test_params in criterion_tests + new_criterion_tests:
     name = test_params.pop('module_name')
     test_params['constructor'] = getattr(nn, name)
