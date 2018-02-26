@@ -1,11 +1,12 @@
 #pragma once
 
-// Provides conversions between Python tensor objects and thpp::Tensors.
+// Provides conversions between Python tensor objects and at::Tensor.
 
 #include <Python.h>
 #include <memory>
-#include <THPP/THPP.h>
+#include <unordered_map>
 #include <ATen/ATen.h>
+#include "torch/csrc/Dtype.h"
 
 namespace torch {
 
@@ -14,18 +15,23 @@ void registerPyTypeObject(
     PyTypeObject *pytype, const std::string& name,
     bool is_cuda, bool is_sparse);
 
-// Gets the PyTypeObject* corresponding to the Tensor
-PyTypeObject* getPyTypeObject(const thpp::Tensor& tensor);
+// Register a PyTypeObject* with the given attributes
+void registerStoragePyTypeObject(
+    PyTypeObject *pytype, const std::string& name,
+    bool is_cuda, bool is_sparse);
 
-// Creates a Tensor from a Python tensor object
-std::unique_ptr<thpp::Tensor> createTensor(PyObject *data);
+void registerDtypeObject(THPDtype *dtype, at::Type& type);
 
-// Creates Python tensor object from a Tensor
-PyObject* createPyObject(const thpp::Tensor& tensor);
-
-PyObject* createPyObject(at::Tensor tensor);
+PyObject* createPyObject(const at::Tensor& tensor);
+PyObject* createPyObject(const at::Storage& storage);
 PyTypeObject* getPyTypeObject(const at::Tensor& tensor);
+at::Type& getATenType(PyTypeObject* type);
+THPDtype* getDtype(const at::Type& type);
 //rename to createPyObject when THPP is removed
-at::Tensor createTensorAT(PyObject *data);
+// Creates a at::Tensor from a PyObject.  Does NOT steal the PyObject reference.
+at::Tensor createTensor(PyObject* data);
+std::unique_ptr<at::Storage> createStorage(PyObject* obj);
+
+bool isStorage(PyObject* obj);
 
 }  // namespace torch

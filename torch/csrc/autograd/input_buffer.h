@@ -9,28 +9,31 @@
 #include <vector>
 #include <utility>
 #include <memory>
-#include <THPP/THPP.h>
+#include <ATen/ATen.h>
 
 #include "torch/csrc/autograd/variable.h"
 
 namespace torch { namespace autograd {
 
 struct InputBuffer {
-  explicit InputBuffer(size_t size);
+  explicit InputBuffer(size_t size)
+    : buffer(size) {}
   InputBuffer(const InputBuffer& other) = delete;
   InputBuffer(InputBuffer&& other) = default;
+  InputBuffer& operator=(InputBuffer&& other) = default;
 
   // Accumulates the variable at a specified index.
-  void add(size_t idx, std::shared_ptr<Variable>&& var);
+  void add(size_t idx, Variable var);
 
   int device() const;
 
+  Variable operator[](std::size_t pos) { return buffer[pos]; }
+
   // Returns the inputs as a list of variables. Destroys given InputBuffer.
-  static std::vector<std::shared_ptr<Variable>> variables(InputBuffer&& buffer);
+  static std::vector<Variable> variables(InputBuffer&& buffer);
 
 private:
-  // (Variable, version at save)
-  std::vector<std::pair<std::shared_ptr<Variable>, int>> buffer;
+  std::vector<Variable> buffer;
 };
 
 }}  // namespace torch::autograd

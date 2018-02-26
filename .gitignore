@@ -6,12 +6,16 @@ torch/version.py
 torch/csrc/generic/TensorMethods.cpp
 torch/lib/*.so*
 torch/lib/*.a*
+torch/lib/*.dll*
+torch/lib/*.lib
 torch/lib/*.dylib*
 torch/lib/*.h
 torch/lib/build
 torch/lib/tmp_install
 torch/lib/include
 torch/lib/torch_shm_manager
+torch/csrc/jit/generated/*
+torch/csrc/autograd/generated/*
 torch/csrc/cudnn/cuDNN.cpp
 torch/csrc/nn/THNN.cwrap
 torch/csrc/nn/THNN.cpp
@@ -36,6 +40,7 @@ test/.coverage
 */**/*.dylib*
 test/data/legacy_serialized.pt
 test/data/linear.pt
+.mypy_cache
 
 # IPython notebook checkpoints
 .ipynb_checkpoints
@@ -46,6 +51,11 @@ test/data/linear.pt
 *.swp
 *~
 
-# OSX dir files
+# macOS dir files
 .DS_Store
 
+# Ninja files
+.ninja_deps
+.ninja_log
+compile_commands.json
+*.egg-info/

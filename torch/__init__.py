@@ -9,6 +9,7 @@ on an NVIDIA GPU with compute capability >= 3.0.
 """
 
 import sys
+import platform
 from ._utils import _import_dotted_name
 from .version import __version__
 
@@ -16,6 +17,7 @@ __all__ = [
     'typename', 'is_tensor', 'is_storage', 'set_default_tensor_type',
     'set_rng_state', 'get_rng_state', 'manual_seed', 'initial_seed',
     'save', 'load', 'set_printoptions', 'chunk', 'split', 'stack', 'matmul',
+    'no_grad', 'enable_grad',
     'DoubleStorage', 'FloatStorage', 'LongStorage', 'IntStorage',
     'ShortStorage', 'CharStorage', 'ByteStorage',
     'DoubleTensor', 'FloatTensor', 'LongTensor', 'IntTensor',
@@ -34,21 +36,43 @@ import os as _dl_flags
 # if we have numpy, it *must* be imported before the call to setdlopenflags()
 # or there is risk that later c modules will segfault when importing numpy
 try:
-    import numpy as np
-except:
+    import numpy as _np
+except ImportError:
     pass
 
-# first check if the os package has the required flags
-if not hasattr(_dl_flags, 'RTLD_GLOBAL') or not hasattr(_dl_flags, 'RTLD_NOW'):
-    try:
-        # next try if DLFCN exists
-        import DLFCN as _dl_flags
-    except ImportError:
-        # as a last attempt, use compile-time constants
-        import torch._dl as _dl_flags
+if platform.system() == 'Windows':
+    # first get nvToolsExt PATH
+    def get_nvToolsExt_path():
+        NVTOOLEXT_HOME = _dl_flags.getenv('NVTOOLSEXT_PATH', 'C:\\Program Files\\NVIDIA Corporation\\NvToolsExt')
 
-old_flags = sys.getdlopenflags()
-sys.setdlopenflags(_dl_flags.RTLD_GLOBAL | _dl_flags.RTLD_NOW)
+        if _dl_flags.path.exists(NVTOOLEXT_HOME):
+            return NVTOOLEXT_HOME + '\\bin\\x64\\'
+        else:
+            return ''
+
+    # then add the path to env
+    _dl_flags.environ['PATH'] = _dl_flags.path.dirname(
+        __file__) + '\\lib\\;' + get_nvToolsExt_path() + ';' + _dl_flags.environ['PATH']
+
+else:
+    # first check if the os package has the required flags
+    if not hasattr(_dl_flags, 'RTLD_GLOBAL') or not hasattr(_dl_flags, 'RTLD_LAZY'):
+        try:
+            # next try if DLFCN exists
+            import DLFCN as _dl_flags
+        except ImportError:
+            # as a last attempt, use compile-time constants
+            import torch._dl as _dl_flags
+
+    old_flags = sys.getdlopenflags()
+    sys.setdlopenflags(_dl_flags.RTLD_GLOBAL | _dl_flags.RTLD_LAZY)
+
+del _dl_flags
+
+try:
+    import torch._nvrtc
+except ImportError:
+    pass
 
 from torch._C import *
 
@@ -56,9 +80,9 @@ __all__ += [name for name in dir(_C)
             if name[0] != '_' and
             not name.endswith('Base')]
 
-sys.setdlopenflags(old_flags)
-del _dl_flags
-del old_flags
+if platform.system() != 'Windows':
+    sys.setdlopenflags(old_flags)
+    del old_flags
 
 ################################################################################
 # Define basic utilities
@@ -66,6 +90,9 @@ del old_flags
 
 
 def typename(o):
+    if isinstance(o, torch.Tensor):
+        return o.type()
+
     module = ''
     class_name = ''
     if hasattr(o, '__module__') and o.__module__ != 'builtins' \
@@ -88,7 +115,7 @@ def is_tensor(obj):
     Args:
         obj (Object): Object to test
     """
-    return type(obj) in _tensor_classes
+    return isinstance(obj, torch.Tensor)
 
 
 def is_storage(obj):
@@ -101,47 +128,18 @@ def is_storage(obj):
 
 
 def set_default_tensor_type(t):
-    global Tensor
     global Storage
     Tensor = _import_dotted_name(t)
     Storage = _import_dotted_name(t.replace('Tensor', 'Storage'))
+
+    if 'cuda' in t:
+        import torch.cuda
+        torch.cuda.init()
+
     _C._set_default_tensor_type(Tensor)
 
 
-def set_rng_state(new_state):
-    r"""Sets the random number generator state.
-
-    Args:
-        new_state (torch.ByteTensor): The desired state
-    """
-    default_generator.set_state(new_state)
-
-
-def get_rng_state():
-    r"""Returns the random number generator state as a ByteTensor."""
-    return default_generator.get_state()
-
-
-def manual_seed(seed):
-    r"""Sets the seed for generating random numbers. And returns a
-    `torch._C.Generator` object.
-
-    Args:
-        seed (int or long): The desired seed.
-    """
-    if torch.cuda.is_available() and not torch.cuda._in_bad_fork:
-        torch.cuda.manual_seed_all(seed)
-
-    return default_generator.manual_seed(seed)
-
-
-def initial_seed():
-    r"""Returns the initial seed for generating random numbers as a
-    python `long`.
-    """
-    return default_generator.initial_seed()
-
-
+from .random import set_rng_state, get_rng_state, manual_seed, initial_seed
 from .serialization import save, load
 from ._tensor_str import set_printoptions
 
@@ -271,13 +269,13 @@ _storage_classes = {
     CharStorage, ByteStorage, HalfStorage
 }
 
-_tensor_classes = {
-    DoubleTensor, FloatTensor, LongTensor, IntTensor, ShortTensor,
-    CharTensor, ByteTensor, HalfTensor
+# The _tensor_classes set is initialized by the call to _C._initialize_tensor_type_bindings()
+_tensor_classes = set()
+
+_integer_tensor_classes = {
+    LongTensor, IntTensor, ShortTensor, CharTensor, ByteTensor
 }
 
-
-set_default_tensor_type('torch.FloatTensor')
 
 ################################################################################
 # Import interface functions defined in Python
@@ -291,6 +289,8 @@ from .functional import *
 ################################################################################
 
 def manager_path():
+    if platform.system() == 'Windows':
+        return b""
     import os
     path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'lib', 'torch_shm_manager')
     if not os.path.exists(path):
@@ -301,6 +301,12 @@ def manager_path():
 # Shared memory manager needs to know the exact location of manager executable
 _C._initExtension(manager_path())
 del manager_path
+
+_C._initialize_tensor_type_bindings()
+
+for name in dir(_C._VariableFunctions):
+    globals()[name] = getattr(_C._VariableFunctions, name)
+
 
 ################################################################################
 # Remove unnecessary members
@@ -340,7 +346,14 @@ import torch.optim
 import torch.multiprocessing
 import torch.sparse
 import torch.utils.backcompat
-_C._init_names(list(torch._tensor_classes) + list(torch._storage_classes))
+import torch.onnx
+import torch.random
+import torch.distributions
+import torch.testing
+from torch.autograd import no_grad, enable_grad
+
+_C._init_names(list(torch._storage_classes))
+_C._initialize_dtypes()
 
 # attach docstrings to torch and tensor functions
 from . import _torch_docs, _tensor_docs, _storage_docs
